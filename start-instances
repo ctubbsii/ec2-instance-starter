@@ -1,0 +1,56 @@
+#! /usr/bin/bash
+
+# check if running in a color terminal
+terminalSupportsColor() {
+  local c; c=$(tput colors 2>/dev/null) || c=-1
+  [[ -t 1 ]] && [[ $c -ge 8 ]]
+}
+terminalSupportsColor && doColor=1 || doColor=0
+
+color() { local c; c=$1; shift; [[ $doColor -eq 1 ]] && echo -e "\\e[0;${c}m${*}\\e[0m" || echo "$@"; }
+red() { color 31 "$@"; }
+green() { color 32 "$@"; }
+yellow() { color 33 "$@"; }
+
+get-my-ec2-instances() {
+  aws ec2 describe-instances --filters "Name=tag:user,Values=${USER}" "Name=instance-state-name,Values=stopped" | \
+    jq -r '.Reservations[] | .Instances[] | "\(.InstanceId):\(.Tags[]|select(.Key=="Name")|.Value)"'
+}
+
+prompt-for-my-ec2-instances() {
+  local x
+  local n=0
+  for x in $(get-my-ec2-instances); do
+    ((n++))
+    local y
+    local instname="${x/*:/}"
+    local instid="${x/:*/}"
+    local m; m="Do you want to start up '$(green "$instname")' ($instid) [y/n/q default=$(green Y)]? "
+    read -r -p "$m" y
+    until eval "[[ -z \$y || \$y =~ ^[QYNqyn]\$ ]]"; do
+      echo "Invalid response. Enter 'q', 'n', or 'y'. Press ENTER for default (y)."
+      read -r -p "$m" y
+    done
+    [[ -z $y ]] && y="y" # default = y
+    case "${y^^}" in
+      Q)
+        echo "[$(yellow QUIT)] Skipping remaining instances..."
+        break;
+        ;;
+      Y)
+        echo "[$(yellow YES)] Running 'aws ec2 start-instances --instance-id $(green "$instid")'..."
+        aws ec2 start-instances --instance-id "$instid"
+        ;;
+      N)
+        echo "[$(yellow NO)] Skipping '$(green "$instname")' ($instid)..."
+        ;;
+      *)
+        echo "[$(red ERROR)] Unknown selection: $(red "$y")"
+        ;;
+    esac
+  done
+  { [[ $n -eq 0 ]] && echo "No stopped instances to start for ${USER}."; } || echo "Done."
+}
+
+prompt-for-my-ec2-instances
+
